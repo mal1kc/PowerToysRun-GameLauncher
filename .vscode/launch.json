@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to PowerToys.PowerLauncher (debug script)",
+      "type": "coreclr",
+      "request": "attach",
+      "processName": "PowerToys.PowerLauncher",
+      "justMyCode": false,
+      "preLaunchTask": "Debug: Build and hot-copy GameLauncher",
+      "sourceFileMap": {
+        "C:\\Program Files\\PowerToys\\": "${workspaceFolder}\\GameLauncher\\"
+      }
+    }
+  ]
+}

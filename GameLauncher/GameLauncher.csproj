@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <PTPath Condition="'$(PTPath)' == ''">$(ProgramW6432)\PowerToys</PTPath>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>false</UseWindowsForms>
+    <Platforms>x64</Platforms>
+    <AssemblyName>Community.PowerToys.Run.Plugin.GameLauncher</AssemblyName>
+    <RootNamespace>Community.PowerToys.Run.Plugin.GameLauncher</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Optimize>true</Optimize>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- PowerToys Run SDK references — copy from your PowerToys install -->
+  <ItemGroup>
+    <Reference Include="PowerToys.Common.UI">
+      <HintPath>$(PTPath)\PowerToys.Common.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PowerToys.ManagedCommon">
+      <HintPath>$(PTPath)\PowerToys.ManagedCommon.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="PowerToys.Settings.UI.Lib">
+      <HintPath>$(PTPath)\PowerToys.Settings.UI.Lib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Wox.Infrastructure">
+      <HintPath>$(PTPath)\Wox.Infrastructure.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Wox.Plugin">
+      <HintPath>$(PTPath)\Wox.Plugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Copy plugin assets to output directory -->
+  <ItemGroup>
+    <None Update="plugin.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Images\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
