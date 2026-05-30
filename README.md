@@ -32,7 +32,7 @@ One-shot build and install:
 
 ## inspired from
 
-Flow Launcher pluing = https://www.flowlauncher.com/plugins/games-launcher/  - https://github.com/KrystianLesniak/Flow.Launcher.Plugin.GamesLauncher
+Flow Launcher plugin = https://www.flowlauncher.com/plugins/games-launcher/  - https://github.com/KrystianLesniak/Flow.Launcher.Plugin.GamesLauncher
 
 Notes
 -----
