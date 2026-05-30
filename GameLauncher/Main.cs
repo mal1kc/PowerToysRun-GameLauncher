@@ -6,6 +6,9 @@ using System.Linq;
 using System.Text.Json;
 using Wox.Plugin;
 using Wox.Plugin.Logger;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace Community.PowerToys.Run.Plugin.GameLauncher
 {
@@ -15,6 +18,7 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
         public string Name => "GameLauncher";
         public string Description => "Launch Steam, Epic Games, and Xbox games";
 
+        private IGamePlatform[] _platforms = [];
         private PluginInitContext? _context;
         private string? _iconPathDark;
         private string? _iconPathLight;
@@ -23,28 +27,27 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
         private List<GameEntry> _games = new();
 
         // ── Paths ──────────────────────────────────────────────────────────────
-        private static readonly string SteamPath =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam");
-        private static readonly string EpicManifestPath =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                         "Epic", "EpicGamesLauncher", "Data", "Manifests");
-        private static readonly string XboxGamingRoot =
-            @"C:\XboxGames";
+        // Platform-specific paths moved to platform implementations
 
         // ──────────────────────────────────────────────────────────────────────
         public void Init(PluginInitContext context)
         {
             Log.Info("Initializing GameLauncher plugin", GetType());
             _context = context ?? throw new ArgumentNullException(nameof(context));
-            _iconPathDark  = Path.Combine(context.CurrentPluginMetadata.PluginDirectory, "Images", "gamelauncher.dark.png");
+            // provide plugin directory to platforms that need it
+            PlatformSteam.PluginDirectory = context.CurrentPluginMetadata.PluginDirectory;
+            PlatformEpic.PluginDirectory = context.CurrentPluginMetadata.PluginDirectory;
+            PlatformXbox.PluginDirectory = context.CurrentPluginMetadata.PluginDirectory;
+            _iconPathDark = Path.Combine(context.CurrentPluginMetadata.PluginDirectory, "Images", "gamelauncher.dark.png");
             _iconPathLight = Path.Combine(context.CurrentPluginMetadata.PluginDirectory, "Images", "gamelauncher.light.png");
+            // ensure simple launcher icons exist (32x32 PNGs)
+            try { EnsureLauncherIcons(context.CurrentPluginMetadata.PluginDirectory); } catch { }
             LoadGames();
         }
 
         // ── Query ──────────────────────────────────────────────────────────────
         public List<Result> Query(Query query)
         {
-            Log.Info("Query: " + query.Search, GetType());
             var search = query.Search.Trim();
 
             var results = _games
@@ -53,16 +56,16 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
                 .ThenBy(g => g.Name)
                 .Select(g => new Result
                 {
-                    Title       = g.Name,
-                    SubTitle    = $"{g.Platform}  —  {g.LaunchUri}",
-                    IcoPath     = GetIcon(g.Platform),
-                    Action      = _ =>
+                    Title = g.Name,
+                    SubTitle = $"{g.Platform}  —  {g.LaunchUri}",
+                    IcoPath = GetIcon(g),
+                    Action = _ =>
                     {
                         try
                         {
                             Process.Start(new ProcessStartInfo
                             {
-                                FileName        = g.LaunchUri,
+                                FileName = g.LaunchUri,
                                 UseShellExecute = true,
                             });
                             return true;
@@ -81,10 +84,10 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
             {
                 results.Add(new Result
                 {
-                    Title    = "No games found",
+                    Title = "No games found",
                     SubTitle = $"No match for \"{search}\"",
-                    IcoPath  = _iconPathDark,
-                    Action   = _ => false,
+                    IcoPath = _iconPathDark,
+                    Action = _ => false,
                 });
             }
 
@@ -96,201 +99,122 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
         {
             Log.Info("Loading games...", GetType());
             _games.Clear();
-            _games.AddRange(LoadSteamGames());
-            _games.AddRange(LoadEpicGames());
-            _games.AddRange(LoadXboxGames());
-        }
-
-        // Steam: parse libraryfolders.vdf + appmanifest_*.acf
-        private IEnumerable<GameEntry> LoadSteamGames()
-        {
-            Log.Info("Loading Steam games...", GetType());
-            var games = new List<GameEntry>();
-            try
+            _platforms = new IGamePlatform[]
             {
-                var libraryFolders = new List<string>();
+                new PlatformSteam(),
+                new PlatformEpic(),
+                new PlatformXbox()
+            };
 
-                // Default library
-                var defaultLib = Path.Combine(SteamPath, "steamapps");
-                if (Directory.Exists(defaultLib))
-                    libraryFolders.Add(defaultLib);
-
-                // Extra libraries from libraryfolders.vdf
-                var vdf = Path.Combine(defaultLib, "libraryfolders.vdf");
-                if (File.Exists(vdf))
-                {
-                    foreach (var line in File.ReadAllLines(vdf))
-                    {
-                        var trimmed = line.Trim();
-                        if (trimmed.StartsWith("\"path\"", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var parts = trimmed.Split('"');
-                            if (parts.Length >= 4)
-                            {
-                                var extraPath = Path.Combine(parts[3].Replace("\\\\", "\\"), "steamapps");
-                                if (Directory.Exists(extraPath) && !libraryFolders.Contains(extraPath))
-                                    libraryFolders.Add(extraPath);
-                            }
-                        }
-                    }
-                }
-
-                foreach (var lib in libraryFolders)
-                {
-                    foreach (var acf in Directory.GetFiles(lib, "appmanifest_*.acf"))
-                    {
-                        try
-                        {
-                            var appId = Path.GetFileNameWithoutExtension(acf).Replace("appmanifest_", "");
-                            var name  = ParseAcfValue(File.ReadAllText(acf), "name");
-                            if (!string.IsNullOrEmpty(name))
-                            {
-                                games.Add(new GameEntry(name, "Steam", $"steam://rungameid/{appId}"));
-                            }
-                        }
-                        catch { /* skip bad manifests */ }
-                    }
-                }
-            }
-            catch { /* Steam not installed or unavailable */ }
-            return games;
-        }
-
-        private static string ParseAcfValue(string text, string key)
-        {
-            var needle = $"\"{key}\"";
-            var idx = text.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
-            if (idx < 0) return string.Empty;
-            idx += needle.Length;
-            var start = text.IndexOf('"', idx);
-            if (start < 0) return string.Empty;
-            var end = text.IndexOf('"', start + 1);
-            return end < 0 ? string.Empty : text.Substring(start + 1, end - start - 1);
-        }
-
-        // Epic: parse *.item JSON manifests
-        private IEnumerable<GameEntry> LoadEpicGames()
-        {
-            Log.Info("Loading Epic games...", GetType());
-            var games = new List<GameEntry>();
-            if (!Directory.Exists(EpicManifestPath)) return games;
-            try
+            foreach (var platform in _platforms)
             {
-                foreach (var item in Directory.GetFiles(EpicManifestPath, "*.item"))
+                var platformIconFile = platform.GetPlatformIcon() ?? string.Empty;
+                var platformIconPath = _iconPathDark ?? string.Empty;
+                if (!string.IsNullOrEmpty(platformIconFile))
                 {
+                    // If platform returned an absolute path to an icon, prefer it
                     try
                     {
-                        var json    = File.ReadAllText(item);
-                        using var doc = JsonDocument.Parse(json);
-                        var root  = doc.RootElement;
-
-                        if (!root.TryGetProperty("bIsIncompleteInstall", out var incomplete) ||
-                            incomplete.GetBoolean())
-                            continue;
-
-                        var name       = root.TryGetProperty("DisplayName",    out var dn) ? dn.GetString() : null;
-                        var catalogId  = root.TryGetProperty("CatalogItemId",  out var ci) ? ci.GetString() : null;
-                        var ns         = root.TryGetProperty("CatalogNamespace", out var cns) ? cns.GetString() : null;
-                        var appName    = root.TryGetProperty("AppName",        out var an) ? an.GetString() : null;
-
-                        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(appName)) continue;
-
-                        // com.epicgames.launcher://apps/<Namespace>%3A<CatalogItemId>%3A<AppName>?action=launch
-                        var uri = string.IsNullOrEmpty(ns) || string.IsNullOrEmpty(catalogId)
-                            ? $"com.epicgames.launcher://apps/{appName}?action=launch"
-                            : $"com.epicgames.launcher://apps/{Uri.EscapeDataString(ns)}%3A{Uri.EscapeDataString(catalogId)}%3A{Uri.EscapeDataString(appName)}?action=launch";
-
-                        games.Add(new GameEntry(name, "Epic", uri));
-                    }
-                    catch { /* skip bad items */ }
-                }
-            }
-            catch { }
-            return games;
-        }
-
-        // Xbox/MS Store: scan XboxGames folder for gaming roots
-        private IEnumerable<GameEntry> LoadXboxGames()
-        {
-            Log.Info("Loading Xbox games...", GetType());
-            var games = new List<GameEntry>();
-
-            // Check all drives for XboxGames folder
-            var drives = DriveInfo.GetDrives()
-                .Where(d => d.IsReady && d.DriveType == DriveType.Fixed)
-                .Select(d => Path.Combine(d.RootDirectory.FullName, "XboxGames"))
-                .Concat(new[] { XboxGamingRoot })
-                .Distinct();
-
-            foreach (var root in drives)
-            {
-                if (!Directory.Exists(root)) continue;
-                try
-                {
-                    foreach (var gameDir in Directory.GetDirectories(root))
-                    {
-                        try
+                        if (Path.IsPathRooted(platformIconFile) && File.Exists(platformIconFile))
                         {
-                            // Look for MicrosoftGame.config or appxmanifest
-                            var configFile = Directory.GetFiles(gameDir, "MicrosoftGame.config", SearchOption.AllDirectories)
-                                             .FirstOrDefault()
-                                          ?? Directory.GetFiles(gameDir, "appxmanifest.xml", SearchOption.AllDirectories)
-                                             .FirstOrDefault();
-
-                            if (configFile == null) continue;
-
-                            var content = File.ReadAllText(configFile);
-                            var name    = ExtractXmlValue(content, "ShellVisuals", "DisplayName")
-                                       ?? ExtractXmlValue(content, "uap:VisualElements", "DisplayName")
-                                       ?? Path.GetFileName(gameDir);
-
-                            var identity = ExtractXmlValue(content, "Identity", "Name")
-                                        ?? ExtractXmlValue(content, "mspc:ShellVisuals", "StoreLogo");
-
-                            // Use ms-xbl-<titleId> if we can find it, else use xbox URI with game folder name
-                            var titleId = ExtractXmlValue(content, "ExecutableList", "Executable");
-                            var uri     = !string.IsNullOrEmpty(identity)
-                                ? $"xbox://game-activity/launch/{Uri.EscapeDataString(identity)}"
-                                : $"shell:AppsFolder\\{Uri.EscapeDataString(Path.GetFileName(gameDir))}";
-
-                            if (!string.IsNullOrEmpty(name))
-                                games.Add(new GameEntry(name, "Xbox", uri));
+                            platformIconPath = platformIconFile;
                         }
-                        catch { }
+                        else if (_context != null)
+                        {
+                            var candidate = Path.Combine(_context.CurrentPluginMetadata.PluginDirectory, "Images", platformIconFile);
+                            if (File.Exists(candidate))
+                                platformIconPath = candidate;
+                            else if (File.Exists(platformIconFile))
+                                platformIconPath = platformIconFile;
+                        }
                     }
+                    catch { }
                 }
-                catch { }
+
+                var platformGames = platform.LoadGames()
+                    .Select(g => string.IsNullOrEmpty(g.Icon) ? g with { Icon = platformIconPath } : g)
+                    .ToList();
+
+                _games.AddRange(platformGames);
             }
-            return games;
         }
 
-        private static string? ExtractXmlValue(string xml, string element, string attribute)
+      
+
+        private string GetIcon(GameEntry game)
+        {
+            Log.Debug($"Getting icon for {game.Name} on {game.Platform}, possible icon: {game.Icon}", GetType());
+            if (!string.IsNullOrEmpty(game.Icon))
+                return game.Icon;
+            IGamePlatform? platform = game.Platform switch
+            {
+                "Steam" => _platforms.OfType<PlatformSteam>().FirstOrDefault(),
+                "Epic" => _platforms.OfType<PlatformEpic>().FirstOrDefault(),
+                "Xbox" => _platforms.OfType<PlatformXbox>().FirstOrDefault(),
+                _ => null,
+            };
+
+            var platformDefault = platform?.GetPlatformIcon() ?? string.Empty;
+            if (_context != null)
+            {
+                var candidate = Path.Combine(_context.CurrentPluginMetadata.PluginDirectory, "Images", $"{game.Platform.ToLower()}.png");
+                if (File.Exists(candidate))
+                    platformDefault = candidate;
+            }
+            return platformDefault;
+        }
+
+        private void EnsureLauncherIcons(string pluginDir)
         {
             try
             {
-                var tag = $"<{element}";
-                var idx = xml.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0) return null;
-                var attrNeedle = $"{attribute}=\"";
-                var aIdx = xml.IndexOf(attrNeedle, idx, StringComparison.OrdinalIgnoreCase);
-                if (aIdx < 0) return null;
-                aIdx += attrNeedle.Length;
-                var end = xml.IndexOf('"', aIdx);
-                return end < 0 ? null : xml.Substring(aIdx, end - aIdx);
+                var imagesDir = Path.Combine(pluginDir, "Images");
+                Directory.CreateDirectory(imagesDir);
+                var dark = Path.Combine(imagesDir, "gamelauncher.dark.png");
+                var light = Path.Combine(imagesDir, "gamelauncher.light.png");
+                CreateLauncherIcon(dark, isLight: false);
+                CreateLauncherIcon(light, isLight: true);
             }
-            catch { return null; }
+            catch { }
         }
 
-        private string GetIcon(string platform) => platform switch
+        private void CreateLauncherIcon(string path, bool isLight)
         {
-            "Steam" => _iconPathDark ?? string.Empty,
-            "Epic"  => _iconPathDark ?? string.Empty,
-            "Xbox"  => _iconPathDark ?? string.Empty,
-            _       => _iconPathDark ?? string.Empty,
-        };
+            try
+            {
+                const int size = 32;
+                const int dpi = 96;
+                var rtb = new RenderTargetBitmap(size, size, dpi, dpi, PixelFormats.Pbgra32);
+                var dv = new DrawingVisual();
+                using (var dc = dv.RenderOpen())
+                {
+                    var color = isLight ? Colors.Black : Colors.White;
+                    var brush = new SolidColorBrush(color);
+                    brush.Freeze();
 
-        // ── IPluginI18n ────────────────────────────────────────────────────────
-        public string GetTranslatedPluginTitle()       => Name;
+                    // draw dash (rounded rectangle)
+                    double dashW = 18, dashH = 4;
+                    double rx = (size - dashW) / 2.0;
+                    double ry = (size - dashH) / 2.0;
+                    dc.DrawRoundedRectangle(brush, null, new Rect(rx, ry, dashW, dashH), 1, 1);
+
+                    // draw slash line
+                    var pen = new Pen(brush, 3) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                    pen.Freeze();
+                    dc.DrawLine(pen, new Point(10, 6), new Point(22, 26));
+                }
+                rtb.Render(dv);
+
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(rtb));
+                using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
+                encoder.Save(fs);
+            }
+            catch { }
+        }
+
+// ── IPluginI18n ────────────────────────────────────────────────────────
+public string GetTranslatedPluginTitle() => Name;
         public string GetTranslatedPluginDescription() => Description;
 
         // ── IDisposable ────────────────────────────────────────────────────────
@@ -302,5 +226,5 @@ namespace Community.PowerToys.Run.Plugin.GameLauncher
         }
     }
 
-    public record GameEntry(string Name, string Platform, string LaunchUri);
+  
 }
