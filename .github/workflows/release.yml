@@ -19,11 +19,35 @@ jobs:
       - name: Restore
         run: dotnet restore GameLauncher.sln
 
-      - name: Publish
-        run: dotnet publish GameLauncher/GameLauncher.csproj -c Release -r win-x64 -o artifacts --no-self-contained
+      - name: Download PowerToys release and find libs
+        id: get_powertoys
+        shell: pwsh
+        run: |
+          $api = 'https://api.github.com/repos/microsoft/PowerToys/releases/latest'
+          $r = Invoke-RestMethod -Uri $api
+          $asset = $r.assets | Where-Object { $_.browser_download_url -and ($_.name -match '\.zip$') } | Select-Object -First 1
+          if (-not $asset) { Write-Warning 'No zip asset found'; echo "ptpath=" >> $env:GITHUB_OUTPUT; exit 0 }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile powertoys.zip
+          Expand-Archive powertoys.zip -DestinationPath powertoys -Force
+          $dll = Get-ChildItem -Path powertoys -Recurse -Filter 'Wox.Plugin.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dll) { $ptPath = $dll.Directory.FullName; echo "ptpath=$ptPath" >> $env:GITHUB_OUTPUT } else {
+            $exe = Get-ChildItem -Path powertoys -Recurse -Filter 'PowerToys.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe) { $ptPath = $exe.Directory.FullName; echo "ptpath=$ptPath" >> $env:GITHUB_OUTPUT } else { Write-Warning 'PowerToys libs not found'; echo "ptpath=" >> $env:GITHUB_OUTPUT }
+          }
 
-      - name: Zip artifacts
-        run: Compress-Archive -Path artifacts\* -DestinationPath artifacts.zip
+      - name: Build plugin (uses build.ps1)
+        shell: pwsh
+        run: |
+          if (-not "${{ steps.get_powertoys.outputs.ptpath }}") { Write-Host 'PTPath not found; attempting default Program Files path'; $pt='"$env:ProgramW6432\PowerToys"' } else { $pt = '"' + "${{ steps.get_powertoys.outputs.ptpath }}" + '"' }
+          Write-Host "Using PTPath: $pt"
+          .\build.ps1 -PTPath $pt
+
+      - name: Zip plugin output
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD 'GameLauncher\bin\x64\Release\net9.0-windows'
+          if (-Not (Test-Path $out)) { Write-Error "Output folder not found: $out"; exit 1 }
+          Compress-Archive -Path "$out\*" -DestinationPath artifacts.zip -Force
 
       - name: Create GitHub release
         id: create_release
